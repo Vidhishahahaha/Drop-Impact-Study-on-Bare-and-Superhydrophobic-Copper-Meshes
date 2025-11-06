@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-Time Droplet Diameter Analysis (Corrected Shape Detection)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script async src="https://docs.opencv.org/4.9.0/opencv.js" id="opencv-js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* gray-100 */
+        }
+        canvas {
+            cursor: crosshair;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+        }
+        .card {
+            background-color: white;
+            border-radius: 0.75rem;
+            padding: 2rem;
+            box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            transition: all 0.3s ease-in-out;
+        }
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            color: white;
+            transition: background-color 0.3s;
+            cursor: pointer;
+            border: none;
+            outline: none;
+        }
+        .btn-primary {
+            background-color: #4f46e5; /* indigo-600 */
+        }
+        .btn-primary:hover {
+            background-color: #4338ca; /* indigo-700 */
+        }
+        .btn-secondary {
+            background-color: #10b981; /* emerald-500 */
+        }
+        .btn-secondary:hover {
+            background-color: #059669; /* emerald-600 */
+        }
+         .btn-tertiary {
+            background-color: #64748b; /* slate-500 */
+        }
+        .btn-tertiary:hover {
+            background-color: #475569; /* slate-600 */
+        }
+        .btn:disabled {
+            background-color: #9ca3af; /* gray-400 */
+            cursor: not-allowed;
+        }
+        .loader {
+            border: 5px solid #e5e7eb; /* gray-200 */
+            border-top: 5px solid #4f46e5; /* indigo-600 */
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        input[type="file"]::file-selector-button {
+            padding: 0.5rem 1rem;
+            border-radius: 0.375rem;
+            font-weight: 500;
+            background-color: #eef2ff; /* indigo-50 */
+            color: #4338ca; /* indigo-700 */
+            border: 1px solid #c7d2fe; /* indigo-200 */
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+         input[type="file"]::file-selector-button:hover {
+            background-color: #e0e7ff; /* indigo-100 */
+         }
+    </style>
+</head>
+<body class="text-gray-800">
+
+    <div id="loader-screen" class="fixed inset-0 bg-white bg-opacity-80 backdrop-blur-sm z-50 flex flex-col justify-center items-center">
+        <div class="loader"></div>
+        <p class="mt-4 text-lg font-semibold text-gray-700">Loading OpenCV.js...</p>
+        <p class="text-gray-500">This may take a moment.</p>
+    </div>
+
+    <div class="container mx-auto p-4 md:p-8 max-w-7xl">
+        <header class="text-center mb-10">
+            <h1 class="text-4xl md:text-5xl font-bold text-gray-900">Droplet Diameter Analysis Tool</h1>
+            <p class="mt-4 text-lg text-gray-600 max-w-3xl mx-auto">Calibrate your video with precision. This version uses advanced shape detection to accurately track the droplet.</p>
+        </header>
+
+        <main class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Left Column: Controls & Data -->
+            <div class="flex flex-col gap-8">
+                 <!-- Step 1: Upload Video -->
+                <div class="card">
+                    <h2 class="text-2xl font-bold mb-4 border-b pb-2">Step 1: Upload Your Video</h2>
+                    <div class="mb-4">
+                        <label for="videoLoader" class="font-semibold block mb-2">Select Video File:</label>
+                        <input type="file" id="videoLoader" accept="video/*" class="w-full text-sm text-gray-500">
+                    </div>
+                    <video id="video" class="hidden" controls preload="metadata"></video>
+                </div>
+
+                <!-- Step 2: Calibration -->
+                <div class="card">
+                    <h2 class="text-2xl font-bold mb-4 border-b pb-2">Step 2: Find Frame & Set Scale</h2>
+                    <p class="mb-4 text-gray-600">Use the slider and buttons to find the frame showing the first clear view of the droplet.</p>
+                    
+                    <div id="frame-nav" class="hidden space-y-4 mb-4">
+                        <input type="range" id="frameSlider" min="0" value="0" step="0.01" class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer">
+                        <div class="flex justify-between items-center gap-2">
+                             <button id="prevFrameBtn" class="btn btn-tertiary text-sm py-2 px-3">‹ Prev Frame</button>
+                             <span id="currentTimeDisplay" class="text-sm font-mono text-gray-600">0.00s</span>
+                             <button id="nextFrameBtn" class="btn btn-tertiary text-sm py-2 px-3">Next Frame ›</button>
+                        </div>
+                        <button id="setFrameBtn" class="btn btn-secondary w-full">Use This Frame for Calibration</button>
+                    </div>
+
+                    <div id="calibration-inputs" class="hidden">
+                         <div class="mb-4">
+                            <label for="knownDistance" class="font-semibold block mb-2">Estimated Initial Diameter (cm):</label>
+                            <input type="number" id="knownDistance" value="0.45" step="0.01" class="w-full p-2 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                        </div>
+                         <p id="calibration-instructions" class="text-sm text-indigo-600 bg-indigo-50 p-3 rounded-md">
+                            Click on the <strong>left and right edges</strong> of the droplet on the canvas to define its diameter.
+                        </p>
+                        <div id="calibration-result" class="mt-4 font-semibold text-emerald-600"></div>
+                    </div>
+                </div>
+
+                <!-- Step 3: Analysis -->
+                <div class="card">
+                    <h2 class="text-2xl font-bold mb-4 border-b pb-2">Step 3: Analyze and Get Results</h2>
+                    <button id="startButton" class="btn btn-primary w-full mb-4" disabled>Start Analysis</button>
+                    <div class="text-center p-4 bg-gray-50 rounded-lg">
+                        <p class="text-lg font-medium text-gray-600">Current Diameter:</p>
+                        <p id="diameterDisplay" class="text-4xl font-bold text-indigo-600">0.000 cm</p>
+                    </div>
+                    <div class="mt-4">
+                        <button id="downloadCsvButton" class="btn btn-secondary w-full" disabled>Download Data as CSV</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Canvas Display -->
+            <div class="card">
+                 <h2 id="canvas-title" class="text-2xl font-bold mb-4 text-center">Upload a video to begin</h2>
+                <canvas id="canvas" class="w-full h-auto bg-gray-200"></canvas>
+            </div>
+        </main>
+        
+        <div class="card mt-8">
+            <h2 class="text-2xl font-bold mb-4">Logged Data</h2>
+            <div class="max-h-96 overflow-y-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time (s)</th>
+                            <th scope="col" class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Diameter (cm)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="resultsTableBody" class="bg-white divide-y divide-gray-200"></tbody>
+                </table>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        const loaderScreen = document.getElementById('loader-screen');
+        const videoLoader = document.getElementById('videoLoader');
+        const knownDistanceInput = document.getElementById('knownDistance');
+        const startButton = document.getElementById('startButton');
+        const downloadCsvButton = document.getElementById('downloadCsvButton');
+        const diameterDisplay = document.getElementById('diameterDisplay');
+        const resultsTableBody = document.getElementById('resultsTableBody');
+        const canvas = document.getElementById('canvas');
+        const canvasTitle = document.getElementById('canvas-title');
+        const video = document.getElementById('video');
+        const ctx = canvas.getContext('2d');
+        const frameNav = document.getElementById('frame-nav');
+        const frameSlider = document.getElementById('frameSlider');
+        const currentTimeDisplay = document.getElementById('currentTimeDisplay');
+        const prevFrameBtn = document.getElementById('prevFrameBtn');
+        const nextFrameBtn = document.getElementById('nextFrameBtn');
+        const setFrameBtn = document.getElementById('setFrameBtn');
+        const calibInputs = document.getElementById('calibration-inputs');
+        const calibResult = document.getElementById('calibration-result');
+
+        let calibrationPoints = [];
+        let pixelsPerCm = null;
+        let timeData = [];
+        let diameterData = [];
+        let isCalibrating = false;
+        let calibrationFrameData = null;
+        let frameRate = 30; 
+
+        const opencvJs = document.getElementById('opencv-js');
+        opencvJs.onload = () => cv.onRuntimeInitialized = init;
+        opencvJs.onerror = () => { loaderScreen.innerHTML = '<p class="text-lg font-semibold text-red-600">Failed to load OpenCV.js</p>'; };
+        
+        function init() {
+            console.log("OpenCV.js is ready.");
+            loaderScreen.style.display = 'none';
+
+            videoLoader.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const url = URL.createObjectURL(file);
+                video.src = url;
+                resetState();
+                canvasTitle.textContent = "Find Calibration Frame";
+
+                video.addEventListener('loadedmetadata', () => {
+                    canvas.width = video.videoWidth;
+                    canvas.height = video.videoHeight;
+                    frameSlider.max = video.duration;
+                     try {
+                        // This property is experimental and might not be available
+                        video.getVideoPlaybackQuality().then(quality => {
+                            if (quality.totalVideoFrames && video.duration) {
+                                frameRate = quality.totalVideoFrames / video.duration;
+                                console.log(`Detected frame rate: ${frameRate.toFixed(2)} fps`);
+                            }
+                        });
+                    } catch(err) { console.warn("Could not determine video frame rate. Defaulting to 30fps.")}
+                    video.currentTime = 0;
+                });
+                video.addEventListener('seeked', drawCurrentVideoFrame, { once: true });
+            });
+            
+            function drawCurrentVideoFrame() {
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                frameNav.classList.remove('hidden');
+            }
+
+            frameSlider.addEventListener('input', () => {
+                video.currentTime = frameSlider.value;
+                currentTimeDisplay.textContent = `${parseFloat(video.currentTime).toFixed(2)}s`;
+                video.addEventListener('seeked', drawCurrentVideoFrame, {once: true});
+            });
+
+            function navigateFrames(direction) {
+                 const newTime = video.currentTime + (direction * (1 / frameRate));
+                 video.currentTime = Math.max(0, Math.min(video.duration, newTime));
+                 frameSlider.value = video.currentTime;
+                 currentTimeDisplay.textContent = `${parseFloat(video.currentTime).toFixed(2)}s`;
+                 video.addEventListener('seeked', drawCurrentVideoFrame, { once: true });
+            }
+            prevFrameBtn.addEventListener('click', () => navigateFrames(-1));
+            nextFrameBtn.addEventListener('click', () => navigateFrames(1));
+
+            setFrameBtn.addEventListener('click', () => {
+                frameNav.classList.add('hidden');
+                calibInputs.classList.remove('hidden');
+                isCalibrating = true;
+                calibrationFrameData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            });
+
+            function resetState() {
+                 calibrationPoints = [];
+                 pixelsPerCm = null;
+                 isCalibrating = false;
+                 calibrationFrameData = null;
+                 calibResult.textContent = '';
+                 frameNav.classList.add('hidden');
+                 calibInputs.classList.add('hidden');
+                 startButton.disabled = true;
+                 downloadCsvButton.disabled = true;
+                 diameterDisplay.textContent = '0.000 cm';
+                 resultsTableBody.innerHTML = '';
+                 timeData = [];
+                 diameterData = [];
+                 ctx.clearRect(0, 0, canvas.width, canvas.height);
+                 canvasTitle.textContent = "Upload a video to begin";
+            }
+
+            canvas.addEventListener('click', (e) => {
+                if (!isCalibrating || calibrationPoints.length >= 2) return;
+                
+                const rect = canvas.getBoundingClientRect();
+                const x = (e.clientX - rect.left) * (canvas.width / rect.width);
+                const y = (e.clientY - rect.top) * (canvas.height / rect.height);
+                calibrationPoints.push({ x, y });
+                
+                ctx.putImageData(calibrationFrameData, 0, 0);
+                calibrationPoints.forEach(p => {
+                    ctx.fillStyle = 'rgba(255, 0, 0, 0.7)';
+                    ctx.beginPath();
+                    ctx.arc(p.x, p.y, 5, 0, 2 * Math.PI);
+                    ctx.fill();
+                });
+
+                if (calibrationPoints.length === 2) {
+                    const [p1, p2] = calibrationPoints;
+                    const pixelDistance = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+                    const knownDiameter = parseFloat(knownDistanceInput.value);
+
+                    if (pixelDistance > 0 && knownDiameter > 0) {
+                        pixelsPerCm = pixelDistance / knownDiameter;
+                        calibResult.textContent = `Scale set: ${pixelsPerCm.toFixed(2)} pixels/cm`;
+                        startButton.disabled = false;
+                        isCalibrating = false;
+                    } else {
+                        calibResult.textContent = 'Invalid calibration. Click again.';
+                        calibrationPoints = [];
+                        ctx.putImageData(calibrationFrameData, 0, 0);
+                    }
+                }
+            });
+
+            startButton.addEventListener('click', () => {
+                if (!pixelsPerCm) return;
+                canvasTitle.textContent = "Analysis in Progress...";
+                video.currentTime = 0; 
+                video.play();
+                requestAnimationFrame(processFrame);
+            });
+
+            function processFrame() {
+                if (video.paused || video.ended) {
+                    canvasTitle.textContent = "Analysis Complete";
+                    if(timeData.length > 0) downloadCsvButton.disabled = false;
+                    return;
+                }
+
+                ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                let src = cv.imread(canvas);
+                let displayMat = src.clone(); // Create a separate matrix for display
+                let contours = new cv.MatVector();
+                let hierarchy = new cv.Mat();
+
+                // *** START OF CORRECTED LOGIC ***
+
+                // 1. Define a Region of Interest (ROI) for the top 70% of the screen
+                let roiRect = new cv.Rect(0, 0, src.cols, src.rows * 0.7);
+                let roi = src.roi(roiRect);
+                
+                let gray = new cv.Mat();
+                cv.cvtColor(roi, gray, cv.COLOR_RGBA2GRAY);
+                
+                let binary = new cv.Mat();
+                cv.GaussianBlur(gray, gray, new cv.Size(5, 5), 0);
+                cv.threshold(gray, binary, 100, 255, cv.THRESH_BINARY_INV);
+                
+                // 2. Find contours ONLY within the ROI
+                cv.findContours(binary, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+                let bestContour = null;
+                let maxCircularity = 0;
+
+                // 3. Filter contours by circularity
+                for (let i = 0; i < contours.size(); i++) {
+                    let cnt = contours.get(i);
+                    let area = cv.contourArea(cnt);
+                    
+                    // Filter out tiny noise contours
+                    if (area < 100) {
+                        cnt.delete();
+                        continue;
+                    }
+
+                    let perimeter = cv.arcLength(cnt, true);
+                    let circularity = (4 * Math.PI * area) / (perimeter * perimeter);
+
+                    if (circularity > maxCircularity && circularity > 0.6) {
+                        if (bestContour) bestContour.delete(); // Clean up previous best
+                        maxCircularity = circularity;
+                        bestContour = cnt.clone();
+                    }
+                    cnt.delete();
+                }
+
+                if (bestContour) {
+                    let circle = cv.minEnclosingCircle(bestContour);
+                    let diameterPixels = circle.radius * 2;
+                    let diameterCm = diameterPixels / pixelsPerCm;
+                    
+                    diameterDisplay.textContent = `${diameterCm.toFixed(3)} cm`;
+                    timeData.push(video.currentTime);
+                    diameterData.push(diameterCm);
+                    
+                    const newRow = resultsTableBody.insertRow(0);
+                    newRow.innerHTML = `<td class="px-6 py-4 whitespace-nowrap text-sm">${video.currentTime.toFixed(3)}</td><td class="px-6 py-4 whitespace-nowrap text-sm">${diameterCm.toFixed(3)}</td>`;
+
+                    // Draw on the display matrix (displayMat), not the source (src)
+                    cv.circle(displayMat, circle.center, circle.radius, new cv.Scalar(255, 0, 0, 255), 2);
+                    cv.line(displayMat, {x: circle.center.x - circle.radius, y: circle.center.y}, {x: circle.center.x + circle.radius, y: circle.center.y}, new cv.Scalar(0, 0, 255, 255), 2);
+                    bestContour.delete();
+                }
+
+                cv.imshow('canvas', displayMat);
+                
+                // Cleanup all OpenCV matrices
+                src.delete(); roi.delete(); gray.delete(); binary.delete();
+                contours.delete(); hierarchy.delete(); displayMat.delete();
+
+                // *** END OF CORRECTED LOGIC ***
+                
+                requestAnimationFrame(processFrame);
+            }
+
+            downloadCsvButton.addEventListener('click', () => {
+                let csvContent = "data:text/csv;charset=utf-8,Time (s),Diameter (cm)\r\n";
+                timeData.forEach((time, index) => {
+                    csvContent += `${time.toFixed(4)},${diameterData[index].toFixed(4)}\r\n`;
+                });
+                const link = document.createElement("a");
+                link.setAttribute("href", encodeURI(csvContent));
+                link.setAttribute("download", "droplet_diameter_data.csv");
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            });
+        }
+    </script>
+</body>
+</html>
+
